@@ -29,9 +29,12 @@ RAW 的双模式设计见《前端·JPG与RAW双模式》。
 from __future__ import annotations
 
 import base64
+import json
 import os
+import queue
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -47,6 +50,7 @@ import numpy as np  # noqa: E402
 import torch  # noqa: E402
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.responses import StreamingResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 from data.noise_model import NoiseParams  # noqa: E402
@@ -114,6 +118,13 @@ print(f"[boot] checkpoint = {CKPT}")
 MODEL, DEVICE, AMP = load_engine()
 NOISE = NoiseParams.load(NOISE_JSON)
 print(f"[boot] device = {DEVICE}  amp = {AMP}")
+if DEVICE.type != "cuda":
+    print("[boot] ⚠️ 未检测到 CUDA，模型将用 CPU 推理（会很慢）。")
+    print("[boot]    原因：当前 torch 是 CPU 编译版（Windows 下 pip install torch 默认如此）。")
+    print("[boot]    启用 GPU（RTX 5080，Blackwell sm_120）请重装 CUDA 版 torch：")
+    print("[boot]      .venv\\Scripts\\python.exe -m pip install torch "
+          "--index-url https://download.pytorch.org/whl/cu132")
+    print("[boot]    装完重启服务，这里应显示 device = cuda。")
 print("[boot] RAW 双模式 = " +
       ("可用" if RAW_SUPPORTED else
        "⚠️ 不可用 —— 同目录的 infer.py 是旧版，只能用 JPEG"))
@@ -203,7 +214,14 @@ def api_info():
 # --------------------------------------------------------------------------- #
 # 接口 2：降噪（主接口）  →  infer.denoise_tiled
 #          ★ 参数只在这里解析一次，响应把它原样带回去 —— 前端以后端返回的为准
+#          ★ 用 SSE 流式返回：先推「阶段 + 真实分块进度」，最后推 done 结果。
+#            前端进度条/加载文字跟着真实进度走，不再是写死的假动画。
 # --------------------------------------------------------------------------- #
+def _sse(payload: dict) -> str:
+    """把一条事件编成 Server-Sent Events 的 data 行。"""
+    return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+
+
 @app.post("/api/denoise")
 async def api_denoise(
     file: UploadFile = File(...),
@@ -231,92 +249,130 @@ async def api_denoise(
             detail="服务端的 infer.py 是旧版，没有 RAW 解码函数"
                    "（read_raw_as_srgb）。请更新 infer.py，或改用 JPEG 输入。")
 
-    tmp = _save_upload(raw, file.filename)
-    try:
-        t0 = time.perf_counter()          # 解码也算进去 —— 前端显示的应该是端到端耗时
+    # 处理逻辑放进后台线程，事件经队列喂给 SSE —— 这样分块回调能实时往外推进度
+    q: "queue.Queue[dict]" = queue.Queue()
 
-        # ② EXIF：RAW 用 exifread（Pillow 读不了 RAW 内嵌 EXIF）
-        #    用下标取值而不是解包 —— 万一 infer.py 那边多返回一个字段，解包会炸，
-        #    而这里炸了会被下面的 except 静默吞掉，EXIF 就白丢了。
+    def emit(**kw: object) -> None:
+        q.put(kw)
+
+    def worker() -> None:
+        tmp: Optional[Path] = None
         try:
-            got = (read_raw_camera_iso if mode == "raw" else
-                   read_exif_camera_iso)(tmp)
-            exif_cam, exif_iso = got[0], got[1]
-        except Exception:                 # noqa: BLE001  读不到 EXIF 不该让整单失败
-            exif_cam, exif_iso = None, None
+            t0 = time.perf_counter()      # 解码也算进去 —— 前端显示端到端耗时
+            emit(type="stage", stage="upload", progress=2, label="正在上传照片")
 
-        use_cam = camera.strip() or exif_cam
-        use_iso = int(iso) if iso else (exif_iso or 3200)
+            tmp = _save_upload(raw, file.filename)
+            emit(type="stage", stage="exif", progress=6, label="正在读取相机与 ISO 信息")
 
-        K, sigma, source, used_cam = resolve_noise_params(use_cam or None, use_iso, NOISE)
-
-        # ③ 解码 —— 两条线在这里分岔
-        if mode == "raw":
-            # 和训练**完全同一条管线**：prepare_data 那 9 个 rawpy 参数 + gamma 2.2。
-            # 白平衡用文件里的 as-shot WB（前提：演示 RAW 和训练数据同一 WB 设置）。
+            # ② EXIF：RAW 用 exifread（Pillow 读不了 RAW 内嵌 EXIF）。
+            #    用下标取值而不是解包 —— 万一 infer.py 那边多返回字段会炸，
+            #    这里炸了不该让整单失败。
             try:
-                rgb = read_raw_as_srgb(tmp, wb=FORCE_WB)
-            except ImportError as exc:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"服务端没装 rawpy，读不了 RAW：{exc}") from exc
-            except Exception as exc:      # noqa: BLE001
-                raise HTTPException(
-                    status_code=400, detail=f"RAW 解码失败：{exc}") from exc
-        else:
+                got = (read_raw_camera_iso if mode == "raw" else
+                       read_exif_camera_iso)(tmp)
+                exif_cam, exif_iso = got[0], got[1]
+            except Exception:             # noqa: BLE001  读不到 EXIF 不该让整单失败
+                exif_cam, exif_iso = None, None
+
+            use_cam = camera.strip() or exif_cam
+            use_iso = int(iso) if iso else (exif_iso or 3200)
+
+            K, sigma, source, used_cam = resolve_noise_params(use_cam or None, use_iso, NOISE)
+
+            # ③ 解码 —— 两条线在这里分岔
+            emit(type="stage", stage="decode", progress=10, label="正在解码图像")
+            if mode == "raw":
+                # 和训练**完全同一条管线**：prepare_data 那 9 个 rawpy 参数 + gamma 2.2。
+                # 白平衡用文件里的 as-shot WB（前提：演示 RAW 和训练数据同一 WB 设置）。
+                try:
+                    rgb = read_raw_as_srgb(tmp, wb=FORCE_WB)
+                except ImportError as exc:
+                    emit(type="error", detail=f"服务端没装 rawpy，读不了 RAW：{exc}")
+                    return
+                except Exception as exc:  # noqa: BLE001
+                    emit(type="error", detail=f"RAW 解码失败：{exc}")
+                    return
+            else:
+                try:
+                    rgb = read_image(tmp)
+                except (FileNotFoundError, ValueError) as exc:
+                    emit(type="error", detail=f"读不了这张图：{exc}")
+                    return
+
+            if rgb.ndim != 3 or rgb.shape[2] != 3:
+                emit(type="error", detail=f"解出来是 {rgb.shape}，期望 (H,W,3)")
+                return
+
+            # ④ RAW 的"原图"要在**推理前**存下来 —— 就是喂给模型的那张
+            input_preview = _png_data_url(rgb) if mode == "raw" else None
+
+            chw = torch.from_numpy(np.ascontiguousarray(rgb.transpose(2, 0, 1)))[None]
+
+            # ⑤ 降噪（OOM 自动降 tile 重试一次）。进度：10%→94% 映射到分块完成比例。
+            def on_tile(done: int, total: int) -> None:
+                pct = 10 + int(round(84.0 * done / total)) if total else 94
+                emit(type="progress", stage="denoise", progress=pct,
+                     done=done, total=total, label=f"正在降噪 {done}/{total} 块")
+
+            used_tile = tile
             try:
-                rgb = read_image(tmp)
-            except (FileNotFoundError, ValueError) as exc:
-                raise HTTPException(status_code=400,
-                                    detail=f"读不了这张图：{exc}") from exc
+                out = denoise_tiled(MODEL, chw, K, sigma, tile=tile, overlap=overlap,
+                                    device=DEVICE, amp_dtype=AMP, progress_cb=on_tile)
+            except torch.cuda.OutOfMemoryError:
+                torch.cuda.empty_cache()
+                used_tile = 256
+                emit(type="stage", stage="denoise", progress=12,
+                     label="显存不足，改用 256 分块重试")
+                out = denoise_tiled(MODEL, chw, K, sigma, tile=used_tile, overlap=16,
+                                    device=DEVICE, amp_dtype=AMP, progress_cb=on_tile)
 
-        if rgb.ndim != 3 or rgb.shape[2] != 3:
-            raise HTTPException(status_code=400,
-                                detail=f"解出来是 {rgb.shape}，期望 (H,W,3)")
+            emit(type="stage", stage="encode", progress=95, label="正在生成结果图")
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
-        # ④ RAW 的"原图"要在**推理前**存下来 —— 就是喂给模型的那张
-        input_preview = _png_data_url(rgb) if mode == "raw" else None
+            # ⑥ denoise_tiled 返回的就是 CPU 上的 (1,3,H,W)
+            den = out[0].permute(1, 2, 0).numpy()
+            b64 = base64.b64encode(_encode_png(den)).decode("ascii")
 
-        chw = torch.from_numpy(np.ascontiguousarray(rgb.transpose(2, 0, 1)))[None]
+            resp = {
+                "ok": True,
+                "mode": mode,                              # "raw" | "jpg"
+                "image": f"data:image/png;base64,{b64}",   # 直接塞 <img src>
+                "camera": use_cam,
+                "used_camera": used_cam,
+                "iso": use_iso,
+                "K": K,
+                "sigma_read": sigma,
+                "source": source,          # calibrated 精确 | brand 同品牌近似 | median 中位数
+                "exif_camera": exif_cam,                   # 让 UI 能显示"识别到了什么"
+                "exif_iso": exif_iso,
+                "width": int(den.shape[1]),
+                "height": int(den.shape[0]),
+                "tile": used_tile,
+                "elapsed_ms": round(elapsed_ms, 1),
+            }
+            if input_preview:
+                resp["input_preview"] = input_preview      # ★ raw 模式下左图用它
+            emit(type="done", progress=100, label="降噪完成", **resp)
+        except Exception as exc:          # noqa: BLE001
+            emit(type="error", detail=f"处理失败：{exc}")
+        finally:
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
 
-        # ⑤ 降噪（OOM 自动降 tile 重试一次）
-        used_tile = tile
-        try:
-            out = denoise_tiled(MODEL, chw, K, sigma, tile=tile, overlap=overlap,
-                                device=DEVICE, amp_dtype=AMP)
-        except torch.cuda.OutOfMemoryError:
-            torch.cuda.empty_cache()
-            used_tile = 256
-            out = denoise_tiled(MODEL, chw, K, sigma, tile=used_tile, overlap=16,
-                                device=DEVICE, amp_dtype=AMP)
-        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    threading.Thread(target=worker, daemon=True).start()
 
-        # ⑥ denoise_tiled 返回的就是 CPU 上的 (1,3,H,W)
-        den = out[0].permute(1, 2, 0).numpy()
-        b64 = base64.b64encode(_encode_png(den)).decode("ascii")
+    def stream():
+        while True:
+            msg = q.get()
+            yield _sse(msg)
+            if msg.get("type") in ("done", "error"):
+                break
 
-        resp = {
-            "ok": True,
-            "mode": mode,                              # "raw" | "jpg"
-            "image": f"data:image/png;base64,{b64}",   # 直接塞 <img src>
-            "camera": use_cam,
-            "used_camera": used_cam,
-            "iso": use_iso,
-            "K": K,
-            "sigma_read": sigma,
-            "source": source,          # calibrated 精确 | brand 同品牌近似 | median 中位数
-            "exif_camera": exif_cam,                   # 让 UI 能显示"识别到了什么"
-            "exif_iso": exif_iso,
-            "width": int(den.shape[1]),
-            "height": int(den.shape[0]),
-            "tile": used_tile,
-            "elapsed_ms": round(elapsed_ms, 1),
-        }
-        if input_preview:
-            resp["input_preview"] = input_preview      # ★ raw 模式下左图用它
-        return resp
-    finally:
-        tmp.unlink(missing_ok=True)
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # --------------------------------------------------------------------------- #
