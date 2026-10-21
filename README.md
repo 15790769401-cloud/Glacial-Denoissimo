@@ -46,24 +46,6 @@ Windows PowerShell 把 `.venv/bin/python` 换成 `.venv\Scripts\python.exe`。
 
 ---
 
-## 模型权重
-
-`demo_model.pth`（约 420 MB）**不在仓库里**。
-
-> GitHub 单文件上限 100 MB，直接提交会被拒。
-
-把它放到本目录后即可运行，两种方式任选：
-
-- 从 **Releases** 下载后放进本目录
-- 或用 **Git LFS**：`git lfs track "*.pth" && git add .gitattributes`
-
-也可以用环境变量指定路径：
-
-```bash
-DENOISSIMO_CKPT=/path/to/demo_model.pth .venv/bin/python server.py
-```
-
----
 
 ## 目录结构
 
