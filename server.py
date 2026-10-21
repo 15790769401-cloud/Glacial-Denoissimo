@@ -55,6 +55,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 from data.noise_model import NoiseParams  # noqa: E402
 from infer import (  # noqa: E402
+    apply_strength,
     denoise_tiled,
     read_exif_camera_iso,
     read_image,
@@ -229,6 +230,7 @@ async def api_denoise(
     iso: int = Form(3200),
     tile: int = Form(512),
     overlap: int = Form(32),
+    strength: float = Form(1.1),
 ):
     raw = await file.read()
     if not raw:
@@ -275,9 +277,11 @@ async def api_denoise(
                 exif_cam, exif_iso = None, None
 
             use_cam = camera.strip() or exif_cam
-            use_iso = int(iso) if iso else (exif_iso or 3200)
+            use_iso = (exif_iso * 10) if exif_iso is not None else (int(iso) if iso else 32000)
 
             K, sigma, source, used_cam = resolve_noise_params(use_cam or None, use_iso, NOISE)
+            if strength != 1.0:
+                K, sigma = apply_strength(K, sigma, strength)
 
             # ③ 解码 —— 两条线在这里分岔
             emit(type="stage", stage="decode", progress=10, label="正在解码图像")
