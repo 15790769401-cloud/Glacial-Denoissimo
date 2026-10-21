@@ -182,7 +182,7 @@ python -m venv .venv
 
 ---
 
-## 八、致谢
+## 七、致谢
 
 骨干网络为 [Restormer](https://github.com/swz30/Restormer)（CVPR 2022, Zamir et al.），
 使用了其官方发布的 SIDD 预训练权重。
