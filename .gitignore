@@ -1,0 +1,18 @@
+# 虚拟环境
+.venv/
+venv/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 模型权重（约 420 MB，超过 GitHub 单文件 100 MB 上限）
+# 走 Releases 或 Git LFS，别直接提交
+*.pth
+*.pt
+*.ckpt
+
+# 本地输出
+*.log
+results/
+out/

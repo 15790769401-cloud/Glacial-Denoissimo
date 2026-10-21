@@ -1,0 +1,33 @@
+# ============================================================================
+# Denoissimo Demo 服务依赖
+# ============================================================================
+#
+# ⚠️ torch 不在这个文件里，必须单独装，而且要指定 CUDA 12.8 的源：
+#
+#     .venv\Scripts\python.exe -m pip install torch torchvision ^
+#         --index-url https://download.pytorch.org/whl/cu128
+#
+#   装完立刻验证（RTX 5060 Ti 是 Blackwell sm_120）：
+#     .venv\Scripts\python.exe -c "import torch; print(torch.cuda.get_device_capability())"
+#   必须输出 (12, 0)，否则跑不起来。
+#
+# ★ 这里**故意不含 lmdb** —— 那是训练时切 patch 用的，Demo 只做推理，用不到。
+#
+# 国内网络慢的话加个镜像：
+#     .venv\Scripts\python.exe -m pip install -r requirements.txt ^
+#         -i https://pypi.tuna.tsinghua.edu.cn/simple
+# ============================================================================
+
+numpy>=1.24
+opencv-python>=4.8
+einops>=0.7
+pyyaml>=6.0
+
+# RAW 双模式
+rawpy>=0.19
+exifread>=3.0            # 读 RAW 内嵌 EXIF（Pillow 读不了）
+
+# HTTP 服务
+fastapi>=0.110
+uvicorn>=0.27
+python-multipart>=0.0.9  # /api/denoise 收 multipart 表单，缺了会报一个看不懂的错

@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Denoissimo —— 图像降噪</title>
+<style>
+  :root {
+    --fg:#1b1b1f; --dim:#6b6b76; --line:#e3e3e8; --bg:#fff;
+    --accent:#2b6cb0; --ok:#15803d; --warn:#b45309; --err:#b91c1c;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0 auto; max-width:1200px; padding:28px 20px 60px; background:var(--bg);
+         font:15px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; color:var(--fg); }
+  h1 { font-size:26px; margin:0 0 4px; }
+  .sub { color:var(--dim); margin:0 0 22px; font-size:13px; }
+
+  fieldset { border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin:0 0 18px; }
+  legend { padding:0 6px; color:var(--dim); font-size:13px; }
+  label { margin-right:18px; }
+  select, input[type=number] {
+    padding:6px 8px; border:1px solid var(--line); border-radius:6px;
+    font:inherit; background:#fff;
+  }
+  button { padding:9px 22px; border:0; border-radius:8px; background:var(--accent);
+           color:#fff; font:inherit; font-size:15px; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:progress; }
+
+  /* 选文件区 */
+  #drop { border:2px dashed var(--line); border-radius:10px; padding:22px;
+          text-align:center; color:var(--dim); cursor:pointer; transition:.15s; }
+  #drop:hover, #drop.over { border-color:var(--accent); background:#f7faff; color:var(--accent); }
+  #drop input[type=file] { display:none; }
+  #fname { font-family:ui-monospace,Consolas,monospace; font-size:13px; color:var(--fg); }
+
+  .badge { display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px;
+           border:1px solid var(--line); color:var(--dim); background:#fafafa; }
+  .badge-raw { border-color:#9ae6b4; background:#f0fff4; color:var(--ok); }
+  .badge-jpg { border-color:#f6d365; background:#fffaf0; color:var(--warn); }
+
+  #params { font-family:ui-monospace,Consolas,monospace; font-size:13px; color:var(--dim);
+            margin:10px 0 0; min-height:20px; }
+  .warn { color:var(--warn); }
+  .err  { color:var(--err); white-space:pre-wrap; }
+
+  .row { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:18px; }
+  @media (max-width:820px) { .row { grid-template-columns:1fr; } }
+  figure { margin:0; }
+  figure img { width:100%; min-height:120px; border:1px solid var(--line); border-radius:8px;
+               background:#fafafa; display:block; }
+  figcaption { margin-top:6px; color:var(--dim); font-size:13px; text-align:center; }
+
+  .stat { font-family:ui-monospace,Consolas,monospace; font-size:12px; color:var(--dim);
+          margin-top:10px; white-space:pre-wrap; }
+  .hint { font-size:12px; color:var(--dim); margin-left:8px; }
+</style>
+</head>
+<body>
+
+<h1>Denoissimo</h1>
+<p class="sub" id="engine">正在连接后端…</p>
+
+<fieldset>
+  <legend>1 · 选照片</legend>
+  <div id="drop">
+    <input type="file" id="file"
+           accept=".jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,
+                   .arw,.cr2,.cr3,.nef,.nrw,.dng,.raf,.rw2,.orf">
+    <div>把照片拖到这里，或 <u>点击选择</u></div>
+    <div style="margin-top:10px">
+      <span id="fname">（还没选）</span>
+      <span id="fmode" class="badge" style="display:none"></span>
+      <span id="hint" class="hint"></span>
+    </div>
+  </div>
+</fieldset>
+
+<fieldset>
+  <legend>2 · 噪声参数</legend>
+  <label>机型
+    <select id="camera"><option value="">自动（读 EXIF）</option></select>
+  </label>
+  <label>ISO
+    <input type="number" id="iso" value="3200" min="50" max="409600" step="1" style="width:110px">
+  </label>
+  <p id="params"></p>
+</fieldset>
+
+<fieldset>
+  <legend>3 · 降噪</legend>
+  <button id="go">开始降噪</button>
+  <span id="status"></span>
+  <p class="stat" id="stat"></p>
+</fieldset>
+
+<div class="row">
+  <figure>
+    <img id="orig" alt="">
+    <figcaption id="cap-orig">原图</figcaption>
+  </figure>
+  <figure>
+    <img id="den" alt="">
+    <figcaption id="cap-den">降噪后</figcaption>
+  </figure>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+const RAW_EXT = ['.arw','.cr2','.cr3','.nef','.nrw','.dng','.raf','.rw2','.orf'];
+const isRaw = n => RAW_EXT.some(e => String(n).toLowerCase().endsWith(e));
+
+const SRC_LABEL = { calibrated:'精确标定', brand:'同品牌近似', median:'三台中位数' };
+
+let NOISE_TABLE = {};      // {相机: {ISO: [K, sigma_read]}}，boot 时一次性拿到
+let currentFile = null;
+let origUrl = null;
+
+// ---------------------------------------------------------------- 启动
+async function boot() {
+  try {
+    const j = await (await fetch('/api/info')).json();
+    NOISE_TABLE = j.noise_table || {};
+    for (const c of j.cameras) {
+      const o = document.createElement('option');
+      o.value = c.name;
+      o.textContent = `${c.name}（${c.isos.length} 档）`;
+      $('camera').appendChild(o);
+    }
+    $('engine').textContent = `已就绪 · 设备 ${j.device} · 模型 ${j.ckpt}`;
+    refreshParams();
+  } catch (e) {
+    $('engine').innerHTML = `<span class="err">连不上后端：${e.message}</span>`;
+  }
+}
+
+// ---------------------------------------------------------------- 参数预览
+// 本地算，不发请求。取档规则和后端一致：表里没有该档 ISO → 按 log2 距离取最近。
+function nearestIso(cam, want) {
+  const isos = Object.keys(NOISE_TABLE[cam] || {}).map(Number);
+  if (!isos.length) return null;
+  return isos.reduce((a, b) =>
+    Math.abs(Math.log2(b / want)) < Math.abs(Math.log2(a / want)) ? b : a);
+}
+
+function refreshParams() {
+  const cam = $('camera').value;
+  const iso = Number($('iso').value || 3200);
+
+  if (!cam) {                       // 选了"自动"：机型只能等后端读 EXIF
+    $('params').textContent = '机型留给后端按 EXIF 判断';
+    return;
+  }
+  const entry = NOISE_TABLE[cam];
+  if (!entry) { $('params').textContent = ''; return; }
+
+  const near = nearestIso(cam, iso);
+  const [K, sigma] = entry[near];
+  const note = near !== iso ? `　<span class="warn">表里无 ISO${iso}，按最近一档估算</span>` : '';
+  $('params').innerHTML =
+    `K = ${K.toFixed(5)} e-/DN　σ_read = ${sigma.toFixed(2)} DN` +
+    `　<span class="warn">（${cam} @ ISO${near}）</span>${note}`;
+}
+
+// ---------------------------------------------------------------- 选文件
+function setFile(f) {
+  currentFile = f;
+  const raw = isRaw(f.name);
+
+  $('fname').textContent = f.name;
+  $('fmode').style.display = '';
+  $('fmode').textContent = raw ? 'RAW · 专业模式' : '普通照片 · 快速模式';
+  $('fmode').className = 'badge ' + (raw ? 'badge-raw' : 'badge-jpg');
+  $('hint').textContent = raw
+    ? '全分辨率推理，约 20~30 秒'
+    : '上传前会缩到长边 1600';
+
+  if (origUrl) URL.revokeObjectURL(origUrl);
+  origUrl = URL.createObjectURL(f);
+
+  // JPEG 浏览器自己能显示；RAW 解不了，等后端回传 input_preview
+  if (raw) $('orig').removeAttribute('src');
+  else     $('orig').src = origUrl;
+
+  $('den').removeAttribute('src');
+  $('cap-orig').textContent = '原图';
+  $('cap-den').textContent = '降噪后';
+  $('status').textContent = '';
+  $('stat').textContent = '';
+}
+
+// 上传前缩小：又快又省流量。RAW 不能走这里（canvas 解不了，而且会平均掉噪声）
+async function shrink(file, maxSide = 1600) {
+  const bmp = await createImageBitmap(file);
+  const s = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
+  if (s === 1) return file;
+  const cv = document.createElement('canvas');
+  cv.width = Math.round(bmp.width * s);
+  cv.height = Math.round(bmp.height * s);
+  cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
+  return await new Promise(r => cv.toBlob(r, 'image/png'));
+}
+
+// ---------------------------------------------------------------- 主流程
+async function run() {
+  if (!currentFile) { $('status').textContent = '先选一张照片'; return; }
+
+  const raw = isRaw(currentFile.name);
+  $('go').disabled = true;
+  $('status').textContent = raw ? '处理中…（RAW 全分辨率）' : '处理中…';
+  $('stat').textContent = '';
+
+  try {
+    const fd = new FormData();
+    if (raw) {
+      fd.append('file', currentFile, currentFile.name);   // ★ 保留原始文件名
+    } else {
+      fd.append('file', await shrink(currentFile), 'upload.png');
+    }
+    fd.append('camera', $('camera').value);                // "" = 让后端读 EXIF
+    fd.append('iso', String($('iso').value || 3200));
+
+    const res = await fetch('/api/denoise', { method: 'POST', body: fd });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || !j.ok) throw new Error(j.detail || `HTTP ${res.status}`);
+
+    // RAW 的左图必须用服务端回传的（同一套解码，对比才诚实）
+    if (j.mode === 'raw' && j.input_preview) $('orig').src = j.input_preview;
+    $('den').src = j.image;
+
+    $('cap-orig').textContent = (j.mode === 'raw') ? '原图（模型看到的输入）' : '原图';
+    $('status').textContent = (j.mode === 'raw')
+      ? '✅ 完成 · 专业模式（RAW 工作流）'
+      : '✅ 完成 · 快速模式（JPEG 输入）';
+
+    const used = j.used_camera ?? j.camera ?? '（未识别）';
+    const src = SRC_LABEL[j.source] || j.source;
+    let s =
+      `${j.width}×${j.height} px　耗时 ${(j.elapsed_ms / 1000).toFixed(1)} s　tile=${j.tile}\n` +
+      `实际使用：${used} @ ISO${j.iso}　K=${j.K.toFixed(5)}　σ=${j.sigma_read.toFixed(2)}　来源：${src}`;
+    if (j.source === 'brand' || j.source === 'median') {
+      s += '\n⚠️ 该机型未标定，参数为近似值';
+    }
+    if (j.exif_camera) s += `\nEXIF 读到：${j.exif_camera} @ ISO${j.exif_iso ?? '?'}`;
+    $('stat').textContent = s;
+
+  } catch (e) {
+    $('status').innerHTML = `<span class="err">失败：${e.message}</span>`;
+  } finally {
+    $('go').disabled = false;
+  }
+}
+
+// ---------------------------------------------------------------- 事件
+$('drop').addEventListener('click', () => $('file').click());
+$('file').addEventListener('change', e => {
+  if (e.target.files[0]) setFile(e.target.files[0]);
+  e.target.value = '';          // 允许再次选同一个文件（否则 change 不触发）
+});
+['dragenter', 'dragover'].forEach(ev => $('drop').addEventListener(ev, e => {
+  e.preventDefault(); $('drop').classList.add('over');
+}));
+['dragleave', 'drop'].forEach(ev => $('drop').addEventListener(ev, e => {
+  e.preventDefault(); $('drop').classList.remove('over');
+}));
+$('drop').addEventListener('drop', e => {
+  const f = e.dataTransfer.files[0];
+  if (f) setFile(f);
+});
+
+$('camera').addEventListener('change', refreshParams);
+$('iso').addEventListener('input', refreshParams);
+$('go').addEventListener('click', run);
+
+boot();
+</script>
+</body>
+</html>
