@@ -117,3 +117,14 @@ RAW 按**文件名后缀**识别，上传时请保留原始文件名。
 
 骨干网络为 [Restormer](https://github.com/swz30/Restormer)（CVPR 2022, Zamir et al.），
 加载其官方 SIDD 预训练权重。
+
+## 效果展示 
+高ISO（2000）：
+<img width="1914" height="871" alt="Image_1792338336283_798" src="https://github.com/user-attachments/assets/b89c72b7-125b-449f-8f6a-aac8436614e8" />
+<img width="1912" height="872" alt="Image_1792338337727_902" src="https://github.com/user-attachments/assets/86854ff1-4886-4635-8b4f-c57ee5f73584" />
+
+极高ISO（51200）
+<img width="2736" height="1689" alt="Image_1792135501980_94" src="https://github.com/user-attachments/assets/5f9415c2-8fed-43bd-89a1-64493e068bbb" />
+<img width="2736" height="1689" alt="Image_1792135503939_291" src="https://github.com/user-attachments/assets/19a31d2d-c359-4fd4-a43c-65b84c5dcd11" />
+
+
