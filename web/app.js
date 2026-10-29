@@ -7,7 +7,7 @@ const timer = setInterval(() => {
 }, 120);
 
 const text1 = document.querySelector('.text1');
-const target1 = '为Canan, Sony, Nikon*定制的降噪大模型';
+const target1 = '为Canon, Sony, Nikon*定制的降噪大模型';
 const text2 = document.querySelector('.text2');
 const target2 = '以超棒的自训练算法，打造极佳的降噪效果';
 const chars = '为定制的降噪大模型以超棒的自训练算法打造极佳的降噪效果';
@@ -97,26 +97,31 @@ let typewriterStarted = false;
 
 const textAreaData = [
   {
-    title: '10档ISO采样，轻松面对暗光',
-    desc: '针对暗光环境下的高ISO噪点，系统采用多帧合成与深度学习降噪算法，在保留画面细节的同时有效抑制亮度噪点与色彩噪点，让夜景与弱光拍摄也能获得纯净细腻的画质。'
+    title: '高 ISO 不模糊，暗处轮廓清晰',
+    desc: '高 ISO 让画面变成“雪花屏”。我们为三台相机拍暗帧、做平场标定，摸清每档 ISO 散粒与读出噪声，喂给 Transformer 大模型——抹平雪花同时，把暗处轮廓捞回来，不糊成一团。',
+    image: 'img/scene_dark.png'
   },
   {
-    title: '智能识别室内光线，还原真实色彩',
-    desc: '室内光线复杂多变，系统可智能识别场景并自适应调整降噪强度，还原真实色彩与层次，让人像肤色自然、物体质感清晰，即使灯光昏暗也能轻松出片。'
+    title: '智能分辨噪点与纹理',
+    desc: '室内光线不均，暗部噪点多、亮部易过曝。Transformer 的全局视野配合全局残差与 FFT 频域损失，单独扣除噪点、避免“抹平”——放大后发丝根根分明，皮肤纹理清晰。',
+    image: 'img/scene_indoor.png'
   },
   {
-    title: '长时间曝光降噪，消除热噪与坏点',
-    desc: '长时间曝光容易产生热噪点与固定模式噪声，系统通过暗帧校准与AI降噪技术，精准去除热噪与坏点，让星空、车流与夜景长曝画面更加通透纯净。'
+    title: '暗帧校准，星空车流纯净通透',
+    desc: '传感器久用发热，产生热噪点与偏色。我们结合 PTC 曲线测定的散粒噪声，1 秒、10 秒暗帧提取热噪声规律，一起喂给我们的模型——星空杂色、车流光轨颗粒，清理干干净净。',
+    image: 'img/scene_longexp.png'
   },
   {
-    title: '压缩不失真，保持细腻画质',
-    desc: '在压缩与传输过程中画质难免受损，系统利用超分辨率与细节修复技术，补偿压缩伪影与细节损失，让照片在缩小体积的同时依然保持清晰锐利的观感。'
+    title: '压缩不失真，细节智能补齐',
+    desc: '有损压缩产生网格断层与色块。Transformer 的注意力机制敏锐捕捉网格边界断层，抹平色块，并根据上下文补齐被破坏的结构，让照片瞬间恢复高清质感。',
+    image: 'img/scene_compress.png'
   }
 ];
 
 const sceneBtns = document.querySelectorAll('.btns > *');
 const txHeader = document.querySelector('.textarea .tx-header');
 const txText = document.querySelector('.textarea .text');
+const txImg = document.querySelector('.textarea .img-container img');
 
 window.addEventListener('scroll', () => {
   const scrollTop = document.documentElement.scrollTop;
@@ -186,6 +191,7 @@ function renderScene(pos){
   if (!data) return;
   txHeader.textContent = data.title;
   txText.textContent = data.desc;
+  if (data.image && txImg) txImg.src = data.image + '?v=2';
   currentIndex = pos;
   sceneBtns.forEach((btn, i) => {
     btn.classList.toggle('active', i === pos);
@@ -244,8 +250,8 @@ closeBtn.addEventListener('click', (e) => {
 fileInput.addEventListener('change', (e) => {
   if (e.target.files.length > 0) handleFile(e.target.files[0]);
 });
-
 uploadContainer.addEventListener('dragover', (e) => {
+  e.preventDefault();
   e.stopPropagation();
   if (!isAnimating) uploadContainer.classList.add('dragover');
 });
@@ -493,6 +499,7 @@ const uploadBtn = document.querySelector('.upload-icon');
 choicesCard1.addEventListener('click', () => {
   choicesCards.forEach(card => card.classList.remove('active'));
   choicesCard1.classList.add('active');
+  if (choicesCard1.dataset.camera) backend.selectedCamera = choicesCard1.dataset.camera;
   backgroundImg.src = backgroundData[0];
   document.documentElement.style.setProperty('--color-orange', '#ea5019');
   document.documentElement.style.setProperty('--color-red', '#cf141b');
@@ -503,6 +510,7 @@ choicesCard1.addEventListener('click', () => {
 choicesCard2.addEventListener('click', () => {
   choicesCards.forEach(card => card.classList.remove('active'));
   choicesCard2.classList.add('active');
+  if (choicesCard2.dataset.camera) backend.selectedCamera = choicesCard2.dataset.camera;
   backgroundImg.src = backgroundData[1];
   document.documentElement.style.setProperty('--color-orange', '#5555ff');
   document.documentElement.style.setProperty('--color-red', '#103d7d');
@@ -513,6 +521,7 @@ choicesCard2.addEventListener('click', () => {
 choicesCard3.addEventListener('click', () => {
   choicesCards.forEach(card => card.classList.remove('active'));
   choicesCard3.classList.add('active');
+  if (choicesCard3.dataset.camera) backend.selectedCamera = choicesCard3.dataset.camera;
   backgroundImg.src = backgroundData[2];
   document.documentElement.style.setProperty('--color-orange', '#62a400');
   document.documentElement.style.setProperty('--color-red', '#f4b516');
@@ -592,6 +601,7 @@ async function denoiseImage(file, camera, iso, onEvent) {
   fd.append('file', file, file.name);  
   fd.append('camera', camera || '');
   fd.append('iso', String(iso || 0));
+  fd.append('strength', '1.1');
   fd.append('tile', '512');
   fd.append('overlap', '32');
 
