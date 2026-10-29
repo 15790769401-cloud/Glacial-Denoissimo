@@ -1348,12 +1348,12 @@ fadeInUp2 {
   align-items: center;
   justify-content: center;
   flex-wrap: wrap;
-  gap: min(60px, 3.125vw);
-  padding: 16px 20px;
+  gap: min(48px, 4vw);
+  padding: 10px 10px;
 }
 
 .footer-logo{
-  margin-top: -20px;
+  margin-left: -70px;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -1379,18 +1379,6 @@ fadeInUp2 {
   margin-top: -2px;
 }
 
-.footer-logo::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  right: calc(min(30px, 1.5625vw) * -1 - 3px);
-  transform: translateY(-50%);
-  width: 6px;
-  height: min(100px, 5.2083vw);
-  border-radius: 3px;
-  background-color: white;
-}
-
 .footer-text p {
   text-align: center;
   font-family: 'HanYiQiHeiTi';
@@ -1401,21 +1389,54 @@ fadeInUp2 {
   line-height: 1.8;
 }
 
-.footer-text{
-  position: relative;
-  width: min(800px, 41.6667vw);
+.footer-img{
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: min(180px, 12vw);
 }
 
-.footer-text::after {
+.footer-img p {
+  margin-top: -15px;
+  margin-top: min(20px, 1.0417vw);
+  font-family: 'HanYiQiHeiTi';
+  font-size: min(max(12px, 1.33333vw), 24px);
+  font-weight: 350;
+  color: white;
+  text-align: center;
+  white-space: nowrap;
+  margin-left: 140px;
+}
+
+.footer-img img {
+  width: min(110px, 7vw);
+  height: auto;
+  object-fit: contain;
+  display: block;
+  border-radius: 8px;
+  margin-top: 8px;
+  margin-left: 140px;
+  margin-bottom: 10px;
+}
+
+.footer-contact,
+.footer-img {
+  position: relative;
+  padding-left: min(48px, 4vw);
+}
+
+.footer-contact::before,
+.footer-img::before {
   content: '';
   position: absolute;
+  left: 0;
   top: 50%;
-  right: calc(min(30px, 1.5625vw) * -1 - 3px);
   transform: translateY(-50%);
-  width: 6px;
-  height: min(100px, 5.2083vw);
-  border-radius: 3px;
-  background-color: white;
+  width: 5px;
+  height: min(72px, 4.5vw);
+  border-radius: 2px;
+  background-color: rgba(255, 255, 255, 0.45);
 }
 
 .footer-contact p {
@@ -1454,16 +1475,8 @@ text-overflow:ellipsis;
 color:white;
 }
 
-.loading-text 》 * {
+.loading-text > * {
   font-size: max(36px, 1.625vw);
   font-weight: 450;
   color: var(--color-red);
-  color: white; text-shadow: var(--color-orange, 6px) 0 hsl(320 90% 60%); 
-  animation: tss 5s ease-in-out infinite alternate; 
-}
-
-@keyframes tss 
-{ 
-  from { text-shadow: var(--color-orange, 6px) 0 hsl(320 90% 60%); } 
-  to { text-shadow: calc(var(--color-orange, 6px) * -1) 0 hsl(180 90% 60%); }
 }
