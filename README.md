@@ -53,6 +53,7 @@ Windows PowerShell 把 `.venv/bin/python` 换成 `.venv\Scripts\python.exe`。
 ```bash
 git lfs install
 git clone https://github.com/15790769401-cloud/Glacial-Denoissimo.git
+```
 
 ---
 
