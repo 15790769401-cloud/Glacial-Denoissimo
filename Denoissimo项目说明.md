@@ -166,7 +166,7 @@ python -m venv .venv
 # 浏览器打开 http://127.0.0.1:8000/
 ```
 
-模型权重 `demo_model.pth`（约 420 MB）因超过 GitHub 单文件上限，通过 Releases 分发。
+模型权重 `demo_model.pth`（约 420 MB）因超过 GitHub 单文件上限，通过 LFS 分发。
 
 ---
 
