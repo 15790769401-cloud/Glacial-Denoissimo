@@ -46,6 +46,15 @@ Windows PowerShell 把 `.venv/bin/python` 换成 `.venv\Scripts\python.exe`。
 
 ---
 
+## 模型权重
+
+`demo_model.pth`（约 420 MB）通过 **Git LFS** 托管，克隆前先安装：
+
+```bash
+git lfs install
+git clone https://github.com/15790769401-cloud/Glacial-Denoissimo.git
+
+---
 
 ## 目录结构
 
