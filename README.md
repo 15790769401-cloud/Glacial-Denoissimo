@@ -143,7 +143,7 @@ RAW 按**文件名后缀**识别，上传时请保留原始文件名。
 
 ---
 
-##项目封面
+## 项目封面
 <img width="1536" height="1024" alt="封面" src="https://github.com/user-attachments/assets/ac109e06-457d-4747-8921-e6f4d9d9bc41" />
 
 
